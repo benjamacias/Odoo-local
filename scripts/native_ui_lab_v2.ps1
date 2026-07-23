@@ -669,16 +669,28 @@ function Add-MenuNode {
     [void]$Nodes.Add($Node)
 }
 
+function New-StaticConnectionMenu {
+    return [pscustomobject]@{
+        id = "__native_connection"
+        name = "Conexion"
+        xmlid = "native.static.connection"
+        static_view = "connection"
+        children = @()
+    }
+}
+
 function Rebuild-AppsTree {
     param([string] $Query = "")
-    if (-not $script:SnapshotRoot) { return }
     $Tokens = @(Get-SearchTokens $Query)
     $script:SuppressMenuOpen = $true
     $AppsTree.BeginUpdate()
     try {
         $AppsTree.Nodes.Clear()
-        foreach ($App in @($script:SnapshotRoot.children)) {
+        Add-MenuNode -Nodes $AppsTree.Nodes -Menu (New-StaticConnectionMenu) -Tokens $Tokens
+        if ($script:SnapshotRoot) {
+            foreach ($App in @($script:SnapshotRoot.children)) {
             Add-MenuNode -Nodes $AppsTree.Nodes -Menu $App -Tokens $Tokens
+            }
         }
         if ($Tokens.Count -gt 0) {
             $AppsTree.ExpandAll()
@@ -686,13 +698,35 @@ function Rebuild-AppsTree {
             $AppsTree.CollapseAll()
         }
         if ($NavCountLabel) {
-            $Text = if ($Tokens.Count -eq 0) { "$($AppsTree.Nodes.Count) apps visibles" } else { "$($AppsTree.GetNodeCount($true)) coincidencias para '$Query'" }
+            $DynamicCount = if ($script:SnapshotRoot) { @($script:SnapshotRoot.children).Count } else { 0 }
+            $Text = if ($Tokens.Count -eq 0) { "$DynamicCount apps visibles" } else { "$($AppsTree.GetNodeCount($true)) coincidencias para '$Query'" }
             $NavCountLabel.Text = $Text
         }
     } finally {
         $AppsTree.EndUpdate()
         $script:SuppressMenuOpen = $false
     }
+}
+
+function Show-DynamicView {
+    if ($StaticHost) { $StaticHost.Visible = $false }
+    if ($ContentSplit) {
+        $ContentSplit.Visible = $true
+        $ContentSplit.BringToFront()
+    }
+}
+
+function Show-ConnectionView {
+    if ($Window) { $Window.Text = "Odoo Native UI - Conexion" }
+    if ($ContentSplit) { $ContentSplit.Visible = $false }
+    if ($StaticHost) {
+        $StaticHost.Visible = $true
+        $StaticHost.BringToFront()
+    }
+    if ($NavCountLabel -and -not $script:SnapshotRoot) {
+        $NavCountLabel.Text = "Configura la conexion"
+    }
+    Set-Status "Vista estatica de conexion lista para configurar."
 }
 
 function Test-MenuHasUsableAction {
@@ -722,6 +756,7 @@ function Show-UnsupportedAction {
         [string] $StatusText = ""
     )
 
+    Show-DynamicView
     $script:CurrentModel = ""
     $script:CurrentModelName = $Title
     $script:CurrentRecords = @()
@@ -834,6 +869,10 @@ function Open-ClientAction {
 function Open-MenuNode {
     param($Menu)
     if (-not $Menu) { return }
+    if ($Menu.PSObject.Properties["static_view"] -and $Menu.static_view -eq "connection") {
+        Show-ConnectionView
+        return
+    }
     $ActionMenu = Find-FirstActionMenu $Menu
     if (-not $ActionMenu -or -not (Test-MenuHasUsableAction $ActionMenu)) {
         Set-Status "Menu sin accion directa: $($Menu.name)"
@@ -1255,6 +1294,7 @@ function Load-Model {
 
     Start-Loading "Preparando $Title..."
     try {
+    Show-DynamicView
     if ($Window) {
         $Window.Text = "Odoo Native UI - $Title"
     }
@@ -1371,8 +1411,17 @@ function Connect-NativeUi {
 
     $InfoBox.Text = "Conectado  |  Odoo $($Health.odoo_version)  |  $($SessionInfo.user.name)  |  DB $($SessionInfo.database)  |  Bridge $($Health.bridge_version)"
     $ConnectButton.Text = "Reconectar"
+    if ($ConnectSettingsButton) { $ConnectSettingsButton.Text = "Reconectar" }
+    if ($ConnectionSubtitle) {
+        $ConnectionSubtitle.Text = "Conectado a $($SessionInfo.database). Esta vista sigue siendo fija para cambios de conexion."
+    }
     Stop-Loading "Conectado a $($SessionInfo.database)."
-    Load-Metadata
+    if ($StayOnConnectionBox -and $StayOnConnectionBox.Checked) {
+        Show-ConnectionView
+        Set-Status "Conectado a $($SessionInfo.database). La vista estatica queda fija."
+    } else {
+        Load-Metadata
+    }
     } catch {
         Stop-Loading
         throw
@@ -1453,7 +1502,7 @@ $Root.Dock = "Fill"
 $Root.BackColor = $script:ColorBackground
 $Root.RowCount = 3
 $Root.ColumnCount = 1
-[void]$Root.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 86)))
+[void]$Root.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 48)))
 [void]$Root.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 100)))
 [void]$Root.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 28)))
 $Window.Controls.Add($Root)
@@ -1461,93 +1510,37 @@ $Window.Controls.Add($Root)
 $Top = New-Object System.Windows.Forms.TableLayoutPanel
 $Top.Dock = "Fill"
 $Top.BackColor = $script:ColorSurface
-$Top.ColumnCount = 9
-$Top.Padding = New-Object System.Windows.Forms.Padding(10, 8, 10, 6)
-[void]$Top.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 62)))
-[void]$Top.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 30)))
-[void]$Top.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 32)))
-[void]$Top.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 100)))
-[void]$Top.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 48)))
-[void]$Top.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 38)))
-[void]$Top.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 52)))
-[void]$Top.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 32)))
-[void]$Top.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 112)))
+$Top.ColumnCount = 3
+$Top.Padding = New-Object System.Windows.Forms.Padding(12, 8, 12, 8)
+[void]$Top.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 100)))
+[void]$Top.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 116)))
+[void]$Top.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 126)))
 $Root.Controls.Add($Top, 0, 0)
-
-$UrlLabel = New-Object System.Windows.Forms.Label
-$UrlLabel.Text = "Servidor"
-$UrlLabel.AutoSize = $true
-$UrlLabel.Margin = New-Object System.Windows.Forms.Padding(0, 8, 4, 0)
-Set-FieldLabelStyle $UrlLabel
-$Top.Controls.Add($UrlLabel, 0, 0)
-
-$UrlBox = New-Object System.Windows.Forms.TextBox
-$UrlBox.Text = $Url
-$UrlBox.Dock = "Fill"
-$UrlBox.Margin = New-Object System.Windows.Forms.Padding(0, 4, 8, 0)
-Set-InputStyle $UrlBox
-$Top.Controls.Add($UrlBox, 1, 0)
-
-$DbLabel = New-Object System.Windows.Forms.Label
-$DbLabel.Text = "DB"
-$DbLabel.AutoSize = $true
-$DbLabel.Margin = New-Object System.Windows.Forms.Padding(0, 8, 4, 0)
-Set-FieldLabelStyle $DbLabel
-$Top.Controls.Add($DbLabel, 2, 0)
-
-$DatabaseBox = New-Object System.Windows.Forms.TextBox
-$DatabaseBox.Text = $Database
-$DatabaseBox.Dock = "Fill"
-$DatabaseBox.Margin = New-Object System.Windows.Forms.Padding(0, 4, 8, 0)
-Set-InputStyle $DatabaseBox
-$Top.Controls.Add($DatabaseBox, 3, 0)
-
-$LoginLabel = New-Object System.Windows.Forms.Label
-$LoginLabel.Text = "Login"
-$LoginLabel.AutoSize = $true
-$LoginLabel.Margin = New-Object System.Windows.Forms.Padding(0, 8, 4, 0)
-Set-FieldLabelStyle $LoginLabel
-$Top.Controls.Add($LoginLabel, 4, 0)
-
-$LoginBox = New-Object System.Windows.Forms.TextBox
-$LoginBox.Text = $Login
-$LoginBox.Dock = "Fill"
-$LoginBox.Margin = New-Object System.Windows.Forms.Padding(0, 4, 8, 0)
-Set-InputStyle $LoginBox
-$Top.Controls.Add($LoginBox, 5, 0)
-
-$PasswordLabel = New-Object System.Windows.Forms.Label
-$PasswordLabel.Text = "Clave"
-$PasswordLabel.AutoSize = $true
-$PasswordLabel.Margin = New-Object System.Windows.Forms.Padding(0, 8, 4, 0)
-Set-FieldLabelStyle $PasswordLabel
-$Top.Controls.Add($PasswordLabel, 6, 0)
-
-$PasswordBox = New-Object System.Windows.Forms.TextBox
-$PasswordBox.Text = $Password
-$PasswordBox.UseSystemPasswordChar = $true
-$PasswordBox.Dock = "Fill"
-$PasswordBox.Margin = New-Object System.Windows.Forms.Padding(0, 4, 8, 0)
-Set-InputStyle $PasswordBox
-$Top.Controls.Add($PasswordBox, 7, 0)
-
-$ConnectButton = New-Object System.Windows.Forms.Button
-$ConnectButton.Text = "Conectar"
-$ConnectButton.Dock = "Fill"
-$ConnectButton.Margin = New-Object System.Windows.Forms.Padding(0, 2, 0, 0)
-Set-FlatButton $ConnectButton $true
-$Top.Controls.Add($ConnectButton, 8, 0)
 
 $InfoBox = New-Object System.Windows.Forms.TextBox
 $InfoBox.ReadOnly = $true
 $InfoBox.Dock = "Fill"
-$InfoBox.Margin = New-Object System.Windows.Forms.Padding(0, 8, 0, 0)
+$InfoBox.Margin = New-Object System.Windows.Forms.Padding(0, 2, 10, 0)
 $InfoBox.BorderStyle = [System.Windows.Forms.BorderStyle]::None
 $InfoBox.BackColor = $script:ColorAccentSoft
 $InfoBox.ForeColor = $script:ColorAccentDark
 $InfoBox.Font = New-Object System.Drawing.Font("Segoe UI", 8.5)
-$Top.SetColumnSpan($InfoBox, 9)
-$Top.Controls.Add($InfoBox, 0, 1)
+$InfoBox.Text = "Sin conectar  |  Abrir Conexion para configurar servidor, base y usuario."
+$Top.Controls.Add($InfoBox, 0, 0)
+
+$ConnectionViewButton = New-Object System.Windows.Forms.Button
+$ConnectionViewButton.Text = "Conexion"
+$ConnectionViewButton.Dock = "Fill"
+$ConnectionViewButton.Margin = New-Object System.Windows.Forms.Padding(0, 0, 10, 0)
+Set-FlatButton $ConnectionViewButton $false
+$Top.Controls.Add($ConnectionViewButton, 1, 0)
+
+$ConnectButton = New-Object System.Windows.Forms.Button
+$ConnectButton.Text = "Conectar"
+$ConnectButton.Dock = "Fill"
+$ConnectButton.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 0)
+Set-FlatButton $ConnectButton $true
+$Top.Controls.Add($ConnectButton, 2, 0)
 
 $Main = New-Object System.Windows.Forms.SplitContainer
 $Main.Dock = "Fill"
@@ -1630,6 +1623,163 @@ $ContentSplit.BackColor = $script:ColorBackground
 $ContentSplit.Panel1.BackColor = $script:ColorBackground
 $ContentSplit.Panel2.BackColor = $script:ColorSurface
 $Main.Panel2.Controls.Add($ContentSplit)
+
+$StaticHost = New-Object System.Windows.Forms.Panel
+$StaticHost.Dock = "Fill"
+$StaticHost.BackColor = $script:ColorBackground
+$StaticHost.Visible = $false
+$Main.Panel2.Controls.Add($StaticHost)
+
+$ConnectionView = New-Object System.Windows.Forms.TableLayoutPanel
+$ConnectionView.Dock = "Fill"
+$ConnectionView.BackColor = $script:ColorBackground
+$ConnectionView.ColumnCount = 1
+$ConnectionView.RowCount = 4
+$ConnectionView.Padding = New-Object System.Windows.Forms.Padding(28, 24, 28, 24)
+[void]$ConnectionView.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 72)))
+[void]$ConnectionView.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 184)))
+[void]$ConnectionView.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 56)))
+[void]$ConnectionView.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 100)))
+$StaticHost.Controls.Add($ConnectionView)
+
+$ConnectionHeader = New-Object System.Windows.Forms.TableLayoutPanel
+$ConnectionHeader.Dock = "Fill"
+$ConnectionHeader.BackColor = $script:ColorBackground
+$ConnectionHeader.ColumnCount = 1
+$ConnectionHeader.RowCount = 2
+[void]$ConnectionHeader.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 58)))
+[void]$ConnectionHeader.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 42)))
+$ConnectionView.Controls.Add($ConnectionHeader, 0, 0)
+
+$ConnectionTitle = New-Object System.Windows.Forms.Label
+$ConnectionTitle.Text = "Conexion"
+$ConnectionTitle.Dock = "Fill"
+$ConnectionTitle.Font = New-Object System.Drawing.Font("Segoe UI Semibold", 18)
+$ConnectionTitle.ForeColor = $script:ColorText
+$ConnectionTitle.TextAlign = "BottomLeft"
+$ConnectionHeader.Controls.Add($ConnectionTitle, 0, 0)
+
+$ConnectionSubtitle = New-Object System.Windows.Forms.Label
+$ConnectionSubtitle.Text = "Vista estatica configurable. Es el unico panel fijo; las apps de Odoo se cargan bajo demanda."
+$ConnectionSubtitle.Dock = "Fill"
+$ConnectionSubtitle.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+$ConnectionSubtitle.ForeColor = $script:ColorSubtleText
+$ConnectionSubtitle.TextAlign = "TopLeft"
+$ConnectionHeader.Controls.Add($ConnectionSubtitle, 0, 1)
+
+$ConnectionForm = New-Object System.Windows.Forms.TableLayoutPanel
+$ConnectionForm.Dock = "Fill"
+$ConnectionForm.BackColor = $script:ColorBackground
+$ConnectionForm.ColumnCount = 2
+$ConnectionForm.RowCount = 4
+$ConnectionForm.Padding = New-Object System.Windows.Forms.Padding(0, 8, 0, 0)
+[void]$ConnectionForm.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 130)))
+[void]$ConnectionForm.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 100)))
+for ($RowIndex = 0; $RowIndex -lt 4; $RowIndex++) {
+    [void]$ConnectionForm.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 42)))
+}
+$ConnectionView.Controls.Add($ConnectionForm, 0, 1)
+
+$UrlLabel = New-Object System.Windows.Forms.Label
+$UrlLabel.Text = "Servidor"
+$UrlLabel.Dock = "Fill"
+$UrlLabel.TextAlign = "MiddleLeft"
+Set-FieldLabelStyle $UrlLabel
+$ConnectionForm.Controls.Add($UrlLabel, 0, 0)
+
+$UrlBox = New-Object System.Windows.Forms.TextBox
+$UrlBox.Text = $Url
+$UrlBox.Dock = "Fill"
+$UrlBox.Margin = New-Object System.Windows.Forms.Padding(0, 6, 0, 6)
+Set-InputStyle $UrlBox
+$ConnectionForm.Controls.Add($UrlBox, 1, 0)
+
+$DbLabel = New-Object System.Windows.Forms.Label
+$DbLabel.Text = "Base de datos"
+$DbLabel.Dock = "Fill"
+$DbLabel.TextAlign = "MiddleLeft"
+Set-FieldLabelStyle $DbLabel
+$ConnectionForm.Controls.Add($DbLabel, 0, 1)
+
+$DatabaseBox = New-Object System.Windows.Forms.TextBox
+$DatabaseBox.Text = $Database
+$DatabaseBox.Dock = "Fill"
+$DatabaseBox.Margin = New-Object System.Windows.Forms.Padding(0, 6, 0, 6)
+Set-InputStyle $DatabaseBox
+$ConnectionForm.Controls.Add($DatabaseBox, 1, 1)
+
+$LoginLabel = New-Object System.Windows.Forms.Label
+$LoginLabel.Text = "Usuario"
+$LoginLabel.Dock = "Fill"
+$LoginLabel.TextAlign = "MiddleLeft"
+Set-FieldLabelStyle $LoginLabel
+$ConnectionForm.Controls.Add($LoginLabel, 0, 2)
+
+$LoginBox = New-Object System.Windows.Forms.TextBox
+$LoginBox.Text = $Login
+$LoginBox.Dock = "Fill"
+$LoginBox.Margin = New-Object System.Windows.Forms.Padding(0, 6, 0, 6)
+Set-InputStyle $LoginBox
+$ConnectionForm.Controls.Add($LoginBox, 1, 2)
+
+$PasswordLabel = New-Object System.Windows.Forms.Label
+$PasswordLabel.Text = "Clave"
+$PasswordLabel.Dock = "Fill"
+$PasswordLabel.TextAlign = "MiddleLeft"
+Set-FieldLabelStyle $PasswordLabel
+$ConnectionForm.Controls.Add($PasswordLabel, 0, 3)
+
+$PasswordBox = New-Object System.Windows.Forms.TextBox
+$PasswordBox.Text = $Password
+$PasswordBox.UseSystemPasswordChar = $true
+$PasswordBox.Dock = "Fill"
+$PasswordBox.Margin = New-Object System.Windows.Forms.Padding(0, 6, 0, 6)
+Set-InputStyle $PasswordBox
+$ConnectionForm.Controls.Add($PasswordBox, 1, 3)
+
+$ConnectionActions = New-Object System.Windows.Forms.TableLayoutPanel
+$ConnectionActions.Dock = "Fill"
+$ConnectionActions.BackColor = $script:ColorBackground
+$ConnectionActions.ColumnCount = 3
+[void]$ConnectionActions.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 100)))
+[void]$ConnectionActions.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 168)))
+[void]$ConnectionActions.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 140)))
+$ConnectionView.Controls.Add($ConnectionActions, 0, 2)
+
+$AutoConnectBox = New-Object System.Windows.Forms.CheckBox
+$AutoConnectBox.Text = "Conectar automaticamente al abrir si hay clave"
+$AutoConnectBox.Checked = $true
+$AutoConnectBox.Dock = "Fill"
+$AutoConnectBox.ForeColor = $script:ColorText
+$AutoConnectBox.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+$AutoConnectBox.Margin = New-Object System.Windows.Forms.Padding(0, 10, 12, 0)
+$ConnectionActions.Controls.Add($AutoConnectBox, 0, 0)
+
+$StayOnConnectionBox = New-Object System.Windows.Forms.CheckBox
+$StayOnConnectionBox.Text = "Mantener esta vista al conectar"
+$StayOnConnectionBox.Checked = $false
+$StayOnConnectionBox.Dock = "Fill"
+$StayOnConnectionBox.ForeColor = $script:ColorText
+$StayOnConnectionBox.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+$StayOnConnectionBox.Margin = New-Object System.Windows.Forms.Padding(0, 10, 10, 0)
+$ConnectionActions.Controls.Add($StayOnConnectionBox, 1, 0)
+
+$ConnectSettingsButton = New-Object System.Windows.Forms.Button
+$ConnectSettingsButton.Text = "Conectar"
+$ConnectSettingsButton.Dock = "Fill"
+$ConnectSettingsButton.Margin = New-Object System.Windows.Forms.Padding(0, 6, 0, 6)
+Set-FlatButton $ConnectSettingsButton $true
+$ConnectionActions.Controls.Add($ConnectSettingsButton, 2, 0)
+
+$ConnectionHint = New-Object System.Windows.Forms.Label
+$ConnectionHint.Dock = "Top"
+$ConnectionHint.AutoSize = $true
+$ConnectionHint.MaximumSize = New-Object System.Drawing.Size(760, 0)
+$ConnectionHint.Padding = New-Object System.Windows.Forms.Padding(0, 12, 0, 0)
+$ConnectionHint.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+$ConnectionHint.ForeColor = $script:ColorSubtleText
+$ConnectionHint.Text = "Esta vista no depende de Odoo ni cambia al navegar. Usa estos datos para autenticar, y luego abre cualquier modulo desde el panel izquierdo."
+$ConnectionView.Controls.Add($ConnectionHint, 0, 3)
 
 $ListPanel = New-Object System.Windows.Forms.TableLayoutPanel
 $ListPanel.Dock = "Fill"
@@ -1863,12 +2013,16 @@ $LoadingTimer = New-Object System.Windows.Forms.Timer
 $LoadingTimer.Interval = 120
 $LoadingTimer.Add_Tick({ Step-Loading })
 
-$ConnectButton.Add_Click({
+function Invoke-ConnectFromUi {
     try { Connect-NativeUi } catch {
         Set-Status "Error"
         [System.Windows.Forms.MessageBox]::Show((Get-FriendlyError $_), "Odoo Native UI Lab v2", "OK", "Error") | Out-Null
     }
-})
+}
+
+$ConnectButton.Add_Click({ Invoke-ConnectFromUi })
+$ConnectSettingsButton.Add_Click({ Invoke-ConnectFromUi })
+$ConnectionViewButton.Add_Click({ Show-ConnectionView })
 
 $SearchButton.Add_Click({ try { Load-CurrentPage 0 } catch { Set-Status (Get-FriendlyError $_) } })
 $ReloadButton.Add_Click({ try { Load-CurrentPage $script:Offset } catch { Set-Status (Get-FriendlyError $_) } })
@@ -1978,8 +2132,10 @@ $AppsTree.Add_AfterSelect({
 })
 
 $Window.Add_Shown({
+    Rebuild-AppsTree
     Apply-LabLayout
-    if ($PasswordBox.Text) {
+    Show-ConnectionView
+    if ($AutoConnectBox.Checked -and $PasswordBox.Text) {
         $ConnectButton.PerformClick()
     }
 })

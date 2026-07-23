@@ -33,6 +33,10 @@ $script:FormControls = @{}
 $script:FieldCache = @{}
 $script:IrCache = @{}
 $script:PermissionsCache = @{}
+$script:RecordPageCache = @{}
+$script:RecordPageCacheOrder = @()
+$script:RecordPageCacheLimit = 12
+$script:CurrentGridSignature = ""
 $script:SnapshotRoot = $null
 $script:SuppressMenuOpen = $false
 $script:IsLoading = $false
@@ -1213,6 +1217,117 @@ function Load-CurrentPage {
     Load-ModelPage -Offset $Offset -SelectId $SelectId -Order $Order
 }
 
+function Convert-CachePart {
+    param($Value)
+    try {
+        return ($Value | ConvertTo-Json -Depth 20 -Compress)
+    } catch {
+        return [string]$Value
+    }
+}
+
+function Get-RecordPageCacheKey {
+    param(
+        [array] $Domain,
+        [array] $Fields,
+        [int] $Offset,
+        [int] $Limit,
+        [string] $Order
+    )
+    $FieldsPart = @($Fields | Sort-Object) -join ","
+    $DomainPart = Convert-CachePart $Domain
+    return "$script:CurrentModel|$Offset|$Limit|$Order|$FieldsPart|$DomainPart"
+}
+
+function Get-RecordPageFromCache {
+    param([string] $Key)
+    if (-not $script:RecordPageCache.ContainsKey($Key)) { return $null }
+    $script:RecordPageCacheOrder = @($script:RecordPageCacheOrder | Where-Object { $_ -ne $Key })
+    $script:RecordPageCacheOrder += $Key
+    return $script:RecordPageCache[$Key]
+}
+
+function Set-RecordPageCache {
+    param([string] $Key, $Value)
+    $script:RecordPageCache[$Key] = $Value
+    $script:RecordPageCacheOrder = @($script:RecordPageCacheOrder | Where-Object { $_ -ne $Key })
+    $script:RecordPageCacheOrder += $Key
+    while ($script:RecordPageCacheOrder.Count -gt $script:RecordPageCacheLimit) {
+        $Oldest = $script:RecordPageCacheOrder[0]
+        $script:RecordPageCache.Remove($Oldest)
+        $script:RecordPageCacheOrder = @($script:RecordPageCacheOrder | Select-Object -Skip 1)
+    }
+}
+
+function Clear-RecordPageCacheForModel {
+    param([string] $ModelName)
+    $Prefix = "$ModelName|"
+    $Keys = @($script:RecordPageCache.Keys | Where-Object { $_.StartsWith($Prefix) })
+    foreach ($Key in $Keys) {
+        $script:RecordPageCache.Remove($Key)
+    }
+    $script:RecordPageCacheOrder = @($script:RecordPageCacheOrder | Where-Object { -not $_.StartsWith($Prefix) })
+}
+
+function Ensure-GridColumns {
+    $Signature = ((@("id") + @($script:CurrentListFields)) -join "|")
+    if ($script:CurrentGridSignature -eq $Signature -and $Grid.Columns.Count -gt 0) { return }
+    $Grid.Columns.Clear()
+    [void]$Grid.Columns.Add("id", "ID")
+    $Grid.Columns["id"].FillWeight = 12
+    foreach ($FieldName in $script:CurrentListFields) {
+        [void]$Grid.Columns.Add($FieldName, (Get-FieldTitle $FieldName))
+        $Grid.Columns[$FieldName].FillWeight = if ($FieldName -eq "display_name" -or $FieldName -eq "name") { 42 } else { 24 }
+    }
+    $script:CurrentGridSignature = $Signature
+}
+
+function Render-RecordsPage {
+    param([int] $SelectId = 0)
+
+    Ensure-GridColumns
+    $Grid.SuspendLayout()
+    try {
+        $Grid.Rows.Clear()
+        foreach ($Record in $script:CurrentRecords) {
+            $Values = New-Object System.Collections.ArrayList
+            [void]$Values.Add($Record.id)
+            foreach ($FieldName in $script:CurrentListFields) {
+                [void]$Values.Add((Format-OdooValue (Get-RecordValue $Record $FieldName)))
+            }
+            [void]$Grid.Rows.Add($Values.ToArray())
+        }
+    } finally {
+        $Grid.ResumeLayout()
+    }
+
+    $RangeStart = if ($script:Total -eq 0) { 0 } else { $script:Offset + 1 }
+    $RangeEnd = [Math]::Min($script:Offset + $script:CurrentRecords.Count, $script:Total)
+    $PageLabel.Text = "$RangeStart-$RangeEnd de $script:Total"
+    if ($ListTitle) { $ListTitle.Text = $script:CurrentModelName }
+    if ($ListSubtitle) { $ListSubtitle.Text = "$script:CurrentModel  |  $($PageLabel.Text)" }
+    $PrevButton.Enabled = $script:Offset -gt 0
+    $NextButton.Enabled = ($script:Offset + $script:Limit) -lt $script:Total
+
+    if ($script:CurrentRecords.Count -gt 0) {
+        $SelectedIndex = 0
+        if ($SelectId -gt 0) {
+            for ($Index = 0; $Index -lt $script:CurrentRecords.Count; $Index++) {
+                if ([int](Get-RecordValue $script:CurrentRecords[$Index] "id") -eq $SelectId) {
+                    $SelectedIndex = $Index
+                    break
+                }
+            }
+        }
+        $Grid.ClearSelection()
+        $Grid.Rows[$SelectedIndex].Selected = $true
+        $Grid.CurrentCell = $Grid.Rows[$SelectedIndex].Cells[0]
+        Load-Detail $script:CurrentRecords[$SelectedIndex]
+    } else {
+        Load-Detail $null
+    }
+}
+
 function Load-ModelPage {
     param(
         [int] $Offset = $script:Offset,
@@ -1255,71 +1370,45 @@ function Load-ModelPage {
 
     $ReadFields = @("display_name") + @($script:CurrentListFields) + @($script:CurrentDetailFields)
     $ReadFields = @($ReadFields | Where-Object { $_ } | Select-Object -Unique)
+    $ResolvedOrder = if ($Order) { $Order } elseif (Test-FieldExists "name") { "name" } else { "id" }
+    $CacheKey = Get-RecordPageCacheKey `
+        -Domain $Domain `
+        -Fields $ReadFields `
+        -Offset $script:Offset `
+        -Limit $script:Limit `
+        -Order $ResolvedOrder
 
-    Set-LoadingDetail `
-        -Title "Leyendo registros" `
-        -Detail "Odoo esta devolviendo la pagina solicitada con permisos y dominios reales."
-    $RecordResult = Invoke-OdooJson -Path "/native-ui/model/$script:CurrentModel/records" -Params @{
-        domain = $Domain
-        fields = $ReadFields
-        offset = $script:Offset
-        limit = $script:Limit
-        count = $true
-        order = if ($Order) { $Order } elseif (Test-FieldExists "name") { "name" } else { "id" }
+    $RecordResult = Get-RecordPageFromCache $CacheKey
+    $UsedCache = $null -ne $RecordResult
+    if ($UsedCache) {
+        Set-LoadingDetail `
+            -Title "Restaurando pagina" `
+            -Detail "Usando cache local de esta vista; no se consulta Odoo nuevamente."
+    } else {
+        Set-LoadingDetail `
+            -Title "Leyendo registros" `
+            -Detail "Odoo devuelve solo la pagina solicitada con permisos y dominios reales."
+        $RecordResult = Invoke-OdooJson -Path "/native-ui/model/$script:CurrentModel/records" -Params @{
+            domain = $Domain
+            fields = $ReadFields
+            offset = $script:Offset
+            limit = $script:Limit
+            count = $true
+            order = $ResolvedOrder
+        }
+        Set-RecordPageCache -Key $CacheKey -Value $RecordResult
     }
 
     $script:Total = [int]$RecordResult.total
     $script:CurrentRecords = @($RecordResult.records)
     $script:PartnerRecords = $script:CurrentRecords
     Set-LoadingDetail `
-        -Title "Pintando datos" `
-        -Detail "Construyendo columnas, filas y detalle lateral con controles nativos."
-    $Grid.Rows.Clear()
-    $Grid.Columns.Clear()
+        -Title "Actualizando vista" `
+        -Detail "Reutilizando columnas cuando el esquema no cambio y aplicando solo la pagina visible."
+    Render-RecordsPage -SelectId $SelectId
 
-    [void]$Grid.Columns.Add("id", "ID")
-    $Grid.Columns["id"].FillWeight = 12
-    foreach ($FieldName in $script:CurrentListFields) {
-        [void]$Grid.Columns.Add($FieldName, (Get-FieldTitle $FieldName))
-        $Grid.Columns[$FieldName].FillWeight = if ($FieldName -eq "display_name" -or $FieldName -eq "name") { 42 } else { 24 }
-    }
-
-    foreach ($Record in $script:CurrentRecords) {
-        $Values = New-Object System.Collections.ArrayList
-        [void]$Values.Add($Record.id)
-        foreach ($FieldName in $script:CurrentListFields) {
-            [void]$Values.Add((Format-OdooValue (Get-RecordValue $Record $FieldName)))
-        }
-        [void]$Grid.Rows.Add($Values.ToArray())
-    }
-
-    $RangeStart = if ($script:Total -eq 0) { 0 } else { $script:Offset + 1 }
-    $RangeEnd = [Math]::Min($script:Offset + $script:CurrentRecords.Count, $script:Total)
-    $PageLabel.Text = "$RangeStart-$RangeEnd de $script:Total"
-    if ($ListTitle) { $ListTitle.Text = $script:CurrentModelName }
-    if ($ListSubtitle) { $ListSubtitle.Text = "$script:CurrentModel  |  $($PageLabel.Text)" }
-    $PrevButton.Enabled = $script:Offset -gt 0
-    $NextButton.Enabled = ($script:Offset + $script:Limit) -lt $script:Total
-
-    if ($script:CurrentRecords.Count -gt 0) {
-        $SelectedIndex = 0
-        if ($SelectId -gt 0) {
-            for ($Index = 0; $Index -lt $script:CurrentRecords.Count; $Index++) {
-                if ([int](Get-RecordValue $script:CurrentRecords[$Index] "id") -eq $SelectId) {
-                    $SelectedIndex = $Index
-                    break
-                }
-            }
-        }
-        $Grid.ClearSelection()
-        $Grid.Rows[$SelectedIndex].Selected = $true
-        $Grid.CurrentCell = $Grid.Rows[$SelectedIndex].Cells[0]
-        Load-Detail $script:CurrentRecords[$SelectedIndex]
-    } else {
-        Load-Detail $null
-    }
-
-    Stop-Loading "$script:CurrentModelName cargado: $($PageLabel.Text)"
+    $CacheSuffix = if ($UsedCache) { " desde cache" } else { "" }
+    Stop-Loading "$script:CurrentModelName cargado${CacheSuffix}: $($PageLabel.Text)"
     } catch {
         Stop-Loading
         throw
@@ -1454,6 +1543,8 @@ function Connect-NativeUi {
     try {
     $script:BaseUrl = $UrlBox.Text
     $script:Session = New-Object Microsoft.PowerShell.Commands.WebRequestSession
+    $script:RecordPageCache.Clear()
+    $script:RecordPageCacheOrder = @()
 
     Set-LoadingDetail `
         -Title "Probando bridge" `
@@ -1525,6 +1616,7 @@ function Save-CurrentRecord {
         ids = @($Id)
         values = $Values
     })
+    Clear-RecordPageCacheForModel $script:CurrentModel
     Stop-Loading "Registro $Id guardado."
     Load-CurrentPage $script:Offset -SelectId $Id
     } catch {
@@ -1550,6 +1642,7 @@ function New-CurrentRecord {
         $Result = Invoke-OdooJson -Path "/native-ui/model/$script:CurrentModel/create" -Params @{
             values = $Values
         }
+        Clear-RecordPageCacheForModel $script:CurrentModel
         Stop-Loading "Registro creado: $($Result.id)"
         $SearchBox.Text = ""
         Load-CurrentPage 0 -SelectId ([int]$Result.id) -Order "id desc"

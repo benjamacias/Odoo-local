@@ -38,7 +38,7 @@ $script:SuppressMenuOpen = $false
 $script:IsLoading = $false
 $script:LoadingText = ""
 $script:LoadingFrame = 0
-$script:LoadingFrames = @("|", "/", "-", "\")
+$script:LoadingFrames = @("", ".", "..", "...")
 $script:EditableFields = @("name", "email", "phone", "mobile", "street", "city", "vat", "website")
 $script:VisibleFields = @("name", "email", "phone", "mobile", "company_id", "street", "city", "country_id", "vat", "website")
 
@@ -80,6 +80,15 @@ function Start-Loading {
     $script:IsLoading = $true
     $script:LoadingText = $Text
     $script:LoadingFrame = 0
+    if ($LoadingOverlay) {
+        $LoadingTitleLabel.Text = $Text
+        $LoadingSubtitleLabel.Text = "Consultando Odoo y preparando la vista nativa."
+        $LoadingOverlay.Visible = $true
+        $LoadingOverlay.BringToFront()
+    }
+    if ($OverlayProgress) {
+        $OverlayProgress.MarqueeAnimationSpeed = 28
+    }
     if ($LoadingBar) {
         $LoadingBar.Visible = $true
         $LoadingBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
@@ -91,7 +100,7 @@ function Start-Loading {
     if ($Window) {
         $Window.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
     }
-    Set-Status "$($script:LoadingFrames[0]) $Text"
+    Set-Status $Text
 }
 
 function Stop-Loading {
@@ -104,6 +113,12 @@ function Stop-Loading {
         $LoadingBar.Visible = $false
         $LoadingBar.MarqueeAnimationSpeed = 0
     }
+    if ($OverlayProgress) {
+        $OverlayProgress.MarqueeAnimationSpeed = 0
+    }
+    if ($LoadingOverlay) {
+        $LoadingOverlay.Visible = $false
+    }
     if ($Window) {
         $Window.Cursor = [System.Windows.Forms.Cursors]::Default
     }
@@ -115,7 +130,27 @@ function Stop-Loading {
 function Step-Loading {
     if (-not $script:IsLoading) { return }
     $script:LoadingFrame = ($script:LoadingFrame + 1) % $script:LoadingFrames.Count
-    $StatusLabel.Text = "$($script:LoadingFrames[$script:LoadingFrame]) $script:LoadingText"
+    $FrameText = "$script:LoadingText$($script:LoadingFrames[$script:LoadingFrame])"
+    $StatusLabel.Text = $FrameText
+    if ($LoadingTitleLabel) {
+        $LoadingTitleLabel.Text = $FrameText
+    }
+}
+
+function Set-LoadingDetail {
+    param(
+        [string] $Title,
+        [string] $Detail = ""
+    )
+    if ($Title) {
+        $script:LoadingText = $Title
+        if ($StatusLabel) { $StatusLabel.Text = $Title }
+        if ($LoadingTitleLabel) { $LoadingTitleLabel.Text = $Title }
+    }
+    if ($Detail -and $LoadingSubtitleLabel) {
+        $LoadingSubtitleLabel.Text = $Detail
+    }
+    [System.Windows.Forms.Application]::DoEvents()
 }
 
 function Get-FriendlyError {
@@ -1188,6 +1223,9 @@ function Load-ModelPage {
     Start-Loading "Cargando $script:CurrentModelName..."
     try {
     $script:Offset = [Math]::Max(0, $Offset)
+    Set-LoadingDetail `
+        -Title "Cargando $script:CurrentModelName" `
+        -Detail "Aplicando filtros y preparando la consulta de registros."
     $Query = $SearchBox.Text.Trim()
     $Domain = @()
     foreach ($Term in @($script:CurrentDomain)) {
@@ -1218,6 +1256,9 @@ function Load-ModelPage {
     $ReadFields = @("display_name") + @($script:CurrentListFields) + @($script:CurrentDetailFields)
     $ReadFields = @($ReadFields | Where-Object { $_ } | Select-Object -Unique)
 
+    Set-LoadingDetail `
+        -Title "Leyendo registros" `
+        -Detail "Odoo esta devolviendo la pagina solicitada con permisos y dominios reales."
     $RecordResult = Invoke-OdooJson -Path "/native-ui/model/$script:CurrentModel/records" -Params @{
         domain = $Domain
         fields = $ReadFields
@@ -1230,6 +1271,9 @@ function Load-ModelPage {
     $script:Total = [int]$RecordResult.total
     $script:CurrentRecords = @($RecordResult.records)
     $script:PartnerRecords = $script:CurrentRecords
+    Set-LoadingDetail `
+        -Title "Pintando datos" `
+        -Detail "Construyendo columnas, filas y detalle lateral con controles nativos."
     $Grid.Rows.Clear()
     $Grid.Columns.Clear()
 
@@ -1295,6 +1339,9 @@ function Load-Model {
     Start-Loading "Preparando $Title..."
     try {
     Show-DynamicView
+    Set-LoadingDetail `
+        -Title "Preparando $Title" `
+        -Detail "Resolviendo metadata del modelo y cache de sesion."
     if ($Window) {
         $Window.Text = "Odoo Native UI - $Title"
     }
@@ -1304,8 +1351,14 @@ function Load-Model {
     $script:CurrentDomain = @($Domain)
 
     if ($script:FieldCache.ContainsKey($ModelName)) {
+        Set-LoadingDetail `
+            -Title "Usando campos en cache" `
+            -Detail "La metadata del modelo ya estaba disponible en esta sesion."
         $script:CurrentFields = $script:FieldCache[$ModelName]
     } else {
+        Set-LoadingDetail `
+            -Title "Cargando campos" `
+            -Detail "Leyendo nombres, tipos, relaciones y campos editables desde Odoo."
         $FieldResult = Invoke-OdooJson -Path "/native-ui/model/$ModelName/fields" -Params @{
             attributes = @("string", "type", "readonly", "required", "relation", "selection", "store")
         }
@@ -1318,8 +1371,14 @@ function Load-Model {
     $RequestedViews = @(Get-RenderableViews -Views $Views)
     $IrCacheKey = Get-ViewsCacheKey -ModelName $ModelName -Views $RequestedViews
     if ($script:IrCache.ContainsKey($IrCacheKey)) {
+        Set-LoadingDetail `
+            -Title "Usando vista en cache" `
+            -Detail "El IR nativo de esta vista ya estaba materializado."
         $script:CurrentIr = $script:IrCache[$IrCacheKey]
     } else {
+        Set-LoadingDetail `
+            -Title "Materializando vista" `
+            -Detail "Convirtiendo la vista Odoo en una estructura nativa compacta."
         $IrResult = Invoke-OdooJson -Path "/native-ui/model/$ModelName/ir" -Params @{
             views = $RequestedViews
         }
@@ -1328,8 +1387,14 @@ function Load-Model {
     }
 
     if ($script:PermissionsCache.ContainsKey($ModelName)) {
+        Set-LoadingDetail `
+            -Title "Usando permisos en cache" `
+            -Detail "Aplicando permisos efectivos ya conocidos para este modelo."
         $script:CurrentPermissions = $script:PermissionsCache[$ModelName]
     } else {
+        Set-LoadingDetail `
+            -Title "Verificando permisos" `
+            -Detail "Consultando permisos de crear, leer, escribir y eliminar para el usuario actual."
         $PermissionResult = Invoke-OdooJson -Path "/native-ui/model/$ModelName/permissions"
         $script:CurrentPermissions = $PermissionResult.permissions
         $script:PermissionsCache[$ModelName] = $script:CurrentPermissions
@@ -1390,10 +1455,14 @@ function Connect-NativeUi {
     $script:BaseUrl = $UrlBox.Text
     $script:Session = New-Object Microsoft.PowerShell.Commands.WebRequestSession
 
-    Set-Status "Probando bridge..."
+    Set-LoadingDetail `
+        -Title "Probando bridge" `
+        -Detail "Verificando que el endpoint nativo este disponible antes de autenticar."
     $Health = Invoke-OdooJson -Path "/native-ui/health"
 
-    Set-Status "Autenticando..."
+    Set-LoadingDetail `
+        -Title "Autenticando usuario" `
+        -Detail "Iniciando sesion contra Odoo con la base y credenciales configuradas."
     $Auth = Invoke-OdooJson -Path "/web/session/authenticate" -Params @{
         db = $DatabaseBox.Text
         login = $LoginBox.Text
@@ -1401,8 +1470,13 @@ function Connect-NativeUi {
     }
     if (-not $Auth.uid) { throw "No se pudo autenticar." }
 
-    Set-Status "Cargando snapshot..."
+    Set-LoadingDetail `
+        -Title "Cargando sesion" `
+        -Detail "Leyendo usuario, base, version y capacidades del bridge."
     $SessionInfo = Invoke-OdooJson -Path "/native-ui/session"
+    Set-LoadingDetail `
+        -Title "Cargando menus" `
+        -Detail "Descargando solo el indice inicial; las vistas se cargan despues bajo demanda."
     $Snapshot = Invoke-OdooJson -Path "/native-ui/snapshot/index"
 
     $script:SnapshotRoot = $Snapshot.menus
@@ -1641,6 +1715,46 @@ $ConnectionView.Padding = New-Object System.Windows.Forms.Padding(28, 24, 28, 24
 [void]$ConnectionView.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 56)))
 [void]$ConnectionView.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 100)))
 $StaticHost.Controls.Add($ConnectionView)
+
+$LoadingOverlay = New-Object System.Windows.Forms.TableLayoutPanel
+$LoadingOverlay.Dock = "Fill"
+$LoadingOverlay.BackColor = [System.Drawing.ColorTranslator]::FromHtml("#F8FAFC")
+$LoadingOverlay.ColumnCount = 3
+$LoadingOverlay.RowCount = 5
+$LoadingOverlay.Visible = $false
+$LoadingOverlay.Padding = New-Object System.Windows.Forms.Padding(28, 24, 28, 24)
+[void]$LoadingOverlay.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 50)))
+[void]$LoadingOverlay.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 520)))
+[void]$LoadingOverlay.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 50)))
+[void]$LoadingOverlay.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 50)))
+[void]$LoadingOverlay.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 42)))
+[void]$LoadingOverlay.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 34)))
+[void]$LoadingOverlay.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 34)))
+[void]$LoadingOverlay.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 50)))
+$Main.Panel2.Controls.Add($LoadingOverlay)
+
+$LoadingTitleLabel = New-Object System.Windows.Forms.Label
+$LoadingTitleLabel.Text = "Cargando"
+$LoadingTitleLabel.Dock = "Fill"
+$LoadingTitleLabel.Font = New-Object System.Drawing.Font("Segoe UI Semibold", 16)
+$LoadingTitleLabel.ForeColor = $script:ColorText
+$LoadingTitleLabel.TextAlign = "BottomCenter"
+$LoadingOverlay.Controls.Add($LoadingTitleLabel, 1, 1)
+
+$LoadingSubtitleLabel = New-Object System.Windows.Forms.Label
+$LoadingSubtitleLabel.Text = "Consultando Odoo y preparando la vista nativa."
+$LoadingSubtitleLabel.Dock = "Fill"
+$LoadingSubtitleLabel.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+$LoadingSubtitleLabel.ForeColor = $script:ColorSubtleText
+$LoadingSubtitleLabel.TextAlign = "MiddleCenter"
+$LoadingOverlay.Controls.Add($LoadingSubtitleLabel, 1, 2)
+
+$OverlayProgress = New-Object System.Windows.Forms.ProgressBar
+$OverlayProgress.Dock = "Fill"
+$OverlayProgress.Margin = New-Object System.Windows.Forms.Padding(62, 6, 62, 6)
+$OverlayProgress.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
+$OverlayProgress.MarqueeAnimationSpeed = 0
+$LoadingOverlay.Controls.Add($OverlayProgress, 1, 3)
 
 $ConnectionHeader = New-Object System.Windows.Forms.TableLayoutPanel
 $ConnectionHeader.Dock = "Fill"

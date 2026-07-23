@@ -99,6 +99,15 @@ powershell -ExecutionPolicy Bypass -File .\scripts\native_ui_lab_v2.ps1 -Databas
 
 El lab visual es una ventana Windows nativa temporal. No usa navegador, WebView, HTML, CSS ni JavaScript. Incluye una vista estatica configurable para conexion, arranque minimo sin abrir modelos automaticamente, snapshot, arbol completo de menus, resolucion de acciones, carga de Native UI IR por vista, cache de metadata por sesion, cache de registros con presupuesto de memoria y TTL, grilla virtual, prefetch pequeno, detalle lazy, busqueda, paginacion, detalle lateral, permisos efectivos, guardado basico de campos editables, panel nativo minimo para Conversaciones y layout auto-ajustado al abrir.
 
+Cliente compilado optimizado:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build_native_client.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\run_native_client.ps1
+```
+
+El cliente compilado esta en `native_client/OdooNativeClient`. Usa C# WinForms, grilla virtual, llamadas en segundo plano, cache con presupuesto de memoria, TTL por modelo, prefetch de pagina siguiente, estado por vista y detalle lazy. Es la ruta recomendada para mejor rendimiento y menor consumo frente al lab PowerShell.
+
 ## Configuracion inicial recomendada
 
 Despues de copiar `.env.example` a `.env`, revisa estos valores locales antes de trabajar con datos reales:

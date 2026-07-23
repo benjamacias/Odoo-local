@@ -341,7 +341,7 @@ namespace OdooNativeClient
             top.Controls.Add(connectionButton, 1, 0);
 
             connectButton = FlatButton("Conectar", true);
-            connectButton.Click += async delegate { await ConnectAsync(); };
+            connectButton.Click += async delegate { await SafeExecuteAsync(ConnectAsync); };
             top.Controls.Add(connectButton, 2, 0);
 
             mainSplit = new SplitContainer { Dock = DockStyle.Fill, FixedPanel = FixedPanel.Panel1, Panel1MinSize = 1, Panel2MinSize = 1 };
@@ -370,7 +370,7 @@ namespace OdooNativeClient
             nav.Controls.Add(navSearchBox, 0, 1);
 
             appsTree = new TreeView { Dock = DockStyle.Fill, BorderStyle = BorderStyle.None, BackColor = panel, HideSelection = false, FullRowSelect = true, ShowLines = false, ShowPlusMinus = false, ItemHeight = 26, Font = new Font("Segoe UI", 9) };
-            appsTree.AfterSelect += async delegate(object sender, TreeViewEventArgs args) { await OpenMenuAsync(args.Node.Tag as Dictionary<string, object>); };
+            appsTree.AfterSelect += async delegate(object sender, TreeViewEventArgs args) { await SafeExecuteAsync(delegate { return OpenMenuAsync(args.Node.Tag as Dictionary<string, object>); }); };
             nav.Controls.Add(appsTree, 0, 2);
         }
 
@@ -415,7 +415,7 @@ namespace OdooNativeClient
             actions.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 140));
             actions.Controls.Add(new Label { Dock = DockStyle.Fill, Text = "Arranque minimo: solo sesion y menus; los modelos se abren bajo demanda.", ForeColor = subtle, TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
             var formConnect = FlatButton("Conectar", true);
-            formConnect.Click += async delegate { await ConnectAsync(); };
+            formConnect.Click += async delegate { await SafeExecuteAsync(ConnectAsync); };
             actions.Controls.Add(formConnect, 1, 0);
             view.Controls.Add(actions, 0, 2);
 
@@ -446,13 +446,13 @@ namespace OdooNativeClient
             search.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 92));
             search.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 92));
             searchFieldBox = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList, Margin = new Padding(0, 4, 8, 0) };
-            searchFieldBox.SelectedIndexChanged += async delegate { if (!suppressSearchReload && searchBox.Text.Trim().Length > 0) await LoadPageAsync(0, 0, ""); };
+            searchFieldBox.SelectedIndexChanged += async delegate { if (!suppressSearchReload && searchBox.Text.Trim().Length > 0) await SafeExecuteAsync(delegate { return LoadPageAsync(0, 0, ""); }); };
             searchBox = InputBox("");
-            searchBox.KeyDown += async delegate(object sender, KeyEventArgs args) { if (args.KeyCode == Keys.Enter) { args.SuppressKeyPress = true; await LoadPageAsync(0, 0, ""); } };
+            searchBox.KeyDown += async delegate(object sender, KeyEventArgs args) { if (args.KeyCode == Keys.Enter) { args.SuppressKeyPress = true; await SafeExecuteAsync(delegate { return LoadPageAsync(0, 0, ""); }); } };
             searchButton = FlatButton("Buscar", false);
-            searchButton.Click += async delegate { await LoadPageAsync(0, 0, ""); };
+            searchButton.Click += async delegate { await SafeExecuteAsync(delegate { return LoadPageAsync(0, 0, ""); }); };
             reloadButton = FlatButton("Recargar", false);
-            reloadButton.Click += async delegate { pageCache.ClearModel(currentModel); detailCache.ClearModel(currentModel); await LoadPageAsync(offset, 0, ""); };
+            reloadButton.Click += async delegate { await SafeExecuteAsync(delegate { pageCache.ClearModel(currentModel); detailCache.ClearModel(currentModel); return LoadPageAsync(offset, 0, ""); }); };
             search.Controls.Add(searchFieldBox, 0, 0);
             search.Controls.Add(searchBox, 1, 0);
             search.Controls.Add(searchButton, 2, 0);
@@ -462,7 +462,7 @@ namespace OdooNativeClient
             grid = new DataGridView { Dock = DockStyle.Fill, ReadOnly = true, RowHeadersVisible = false, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false, VirtualMode = true, AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill, AllowUserToAddRows = false, AllowUserToDeleteRows = false, Margin = new Padding(10, 2, 10, 0) };
             StyleGrid(grid);
             grid.CellValueNeeded += GridCellValueNeeded;
-            grid.SelectionChanged += async delegate { if (!suppressSelection) await LoadSelectedDetailAsync(); };
+            grid.SelectionChanged += async delegate { if (!suppressSelection) await SafeExecuteAsync(LoadSelectedDetailAsync); };
             list.Controls.Add(grid, 0, 2);
 
             var pager = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, Padding = new Padding(10, 4, 10, 4), BackColor = background };
@@ -471,12 +471,12 @@ namespace OdooNativeClient
             pager.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             pager.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 104));
             prevButton = FlatButton("Anterior", false);
-            prevButton.Click += async delegate { await LoadPageAsync(offset - Limit, 0, ""); };
+            prevButton.Click += async delegate { await SafeExecuteAsync(delegate { return LoadPageAsync(offset - Limit, 0, ""); }); };
             nextButton = FlatButton("Siguiente", false);
-            nextButton.Click += async delegate { await LoadPageAsync(offset + Limit, 0, ""); };
+            nextButton.Click += async delegate { await SafeExecuteAsync(delegate { return LoadPageAsync(offset + Limit, 0, ""); }); };
             pageLabel = new Label { Dock = DockStyle.Fill, Text = "0-0 de 0", TextAlign = ContentAlignment.MiddleCenter, Font = new Font("Segoe UI", 9, FontStyle.Bold), ForeColor = text };
             newButton = FlatButton("Nuevo", false);
-            newButton.Click += async delegate { await CreateRecordAsync(); };
+            newButton.Click += async delegate { await SafeExecuteAsync(CreateRecordAsync); };
             pager.Controls.Add(prevButton, 0, 0);
             pager.Controls.Add(nextButton, 1, 0);
             pager.Controls.Add(pageLabel, 2, 0);
@@ -505,7 +505,7 @@ namespace OdooNativeClient
             detail.Controls.Add(detailBody, 0, 1);
 
             saveButton = FlatButton("Guardar", true);
-            saveButton.Click += async delegate { await SaveRecordAsync(); };
+            saveButton.Click += async delegate { await SafeExecuteAsync(SaveRecordAsync); };
             detail.Controls.Add(saveButton, 0, 2);
         }
 
@@ -694,23 +694,32 @@ namespace OdooNativeClient
                 SetStatus("Menu sin accion directa.");
                 return;
             }
-            await RunBusy("Abriendo " + OdooClient.Text(actionMenu["name"]), "Resolviendo accion y metadata.", delegate
+            Dictionary<string, object> action = null;
+            string modelToOpen = "";
+            string titleToOpen = OdooClient.Text(actionMenu["name"]);
+            IList domainToOpen = new ArrayList();
+            await RunBusy("Abriendo " + titleToOpen, "Resolviendo accion y metadata.", delegate
             {
                 var actionRef = OdooClient.AsDictionary(actionMenu.ContainsKey("action") ? actionMenu["action"] : null);
                 var parameters = new Dictionary<string, object>();
                 if (actionRef.ContainsKey("raw")) parameters["action_ref"] = OdooClient.Text(actionRef["raw"]);
                 else if (actionRef.ContainsKey("id")) parameters["action_id"] = OdooClient.IntValue(actionRef["id"]);
-                var action = client.Call("/native-ui/action", parameters);
+                action = client.Call("/native-ui/action", parameters);
                 if (!action.ContainsKey("res_model"))
                 {
-                    BeginInvoke((Action)delegate { SetStatus("Accion no representable todavia."); });
                     return;
                 }
-                var model = OdooClient.Text(action["res_model"]);
-                var title = OdooClient.Text(actionMenu["name"]);
-                var domain = OdooClient.AsList(action.ContainsKey("domain_native") ? action["domain_native"] : null);
-                BeginInvoke((Action)(async delegate { await LoadModelAsync(model, title, domain); }));
+                modelToOpen = OdooClient.Text(action["res_model"]);
+                domainToOpen = OdooClient.AsList(action.ContainsKey("domain_native") ? action["domain_native"] : null);
             });
+            if (!string.IsNullOrEmpty(modelToOpen))
+            {
+                await LoadModelAsync(modelToOpen, titleToOpen, domainToOpen);
+            }
+            else if (action != null)
+            {
+                ShowUnsupportedAction(titleToOpen, OdooClient.Text(action.ContainsKey("type") ? action["type"] : "accion"));
+            }
         }
 
         private Dictionary<string, object> FindFirstActionMenu(Dictionary<string, object> menu)
@@ -938,15 +947,27 @@ namespace OdooNativeClient
 
         private async Task CreateRecordAsync()
         {
-            if (!HasField("name")) return;
+            if (client == null || string.IsNullOrEmpty(currentModel)) return;
+            if (readOnly || !BoolPermission("create")) return;
+            if (!HasField("name"))
+            {
+                MessageBox.Show(this, "Este modelo no tiene campo name para crear un registro minimo.", "Odoo Native Client", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            var createdId = 0;
             await RunBusy("Creando registro", "Creacion minima y seleccion automatica.", delegate
             {
                 var result = client.Call("/native-ui/model/" + currentModel + "/create", new Dictionary<string, object> { { "values", new Dictionary<string, object> { { "name", "Nuevo registro" } } } });
                 pageCache.ClearModel(currentModel);
                 detailCache.ClearModel(currentModel);
-                var id = OdooClient.IntValue(result.ContainsKey("id") ? result["id"] : null);
-                BeginInvoke((Action)(async delegate { searchBox.Text = ""; await LoadPageAsync(0, id, "id desc"); }));
+                createdId = OdooClient.IntValue(result.ContainsKey("id") ? result["id"] : null);
             });
+            if (createdId > 0)
+            {
+                searchBox.Text = "";
+                await LoadPageAsync(0, createdId, "id desc");
+                SetStatus("Registro creado: " + createdId);
+            }
         }
 
         private void CollectValues(Control control, Dictionary<string, object> values)
@@ -965,6 +986,41 @@ namespace OdooNativeClient
             detailBody.Controls.Clear();
             detailTitle.Text = "Sin registro";
             detailSubtitle.Text = "";
+        }
+
+        private void ShowUnsupportedAction(string title, string actionType)
+        {
+            SaveCurrentViewState();
+            currentModel = "";
+            currentTitle = title;
+            currentRecord = null;
+            records = new List<Dictionary<string, object>>();
+            grid.RowCount = 0;
+            grid.Columns.Clear();
+            moduleTitle.Text = title;
+            moduleSubtitle.Text = actionType;
+            pageLabel.Text = "0-0 de 0";
+            prevButton.Enabled = false;
+            nextButton.Enabled = false;
+            newButton.Enabled = false;
+            saveButton.Enabled = false;
+            ShowEmptyDetail();
+            detailTitle.Text = title;
+            detailSubtitle.Text = actionType;
+            var message = new Label
+            {
+                Dock = DockStyle.Top,
+                AutoSize = true,
+                MaximumSize = new Size(360, 0),
+                Text = "Esta accion todavia no tiene renderer nativo en el cliente compilado.",
+                ForeColor = text,
+                Padding = new Padding(0, 8, 0, 0)
+            };
+            detailBody.Controls.Add(message);
+            contentSplit.Visible = true;
+            staticHost.Visible = false;
+            contentSplit.BringToFront();
+            SetStatus("Accion no representable todavia: " + title);
         }
 
         private void EnsureGridColumns()
@@ -1113,6 +1169,18 @@ namespace OdooNativeClient
             finally
             {
                 HideBusy();
+            }
+        }
+
+        private async Task SafeExecuteAsync(Func<Task> action)
+        {
+            try
+            {
+                await action();
+            }
+            catch (Exception ex)
+            {
+                ShowError(ex);
             }
         }
 

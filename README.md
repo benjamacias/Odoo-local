@@ -97,7 +97,7 @@ Cliente visual minimo:
 powershell -ExecutionPolicy Bypass -File .\scripts\native_ui_lab_v2.ps1 -Database odoo -Login admin
 ```
 
-El lab visual es una ventana Windows nativa temporal. No usa navegador, WebView, HTML, CSS ni JavaScript. Incluye una vista estatica configurable para conexion, snapshot, arbol completo de menus, resolucion de acciones, carga de Native UI IR por vista, cache de metadata por sesion, busqueda, paginacion, detalle lateral, permisos efectivos, guardado basico de campos editables, panel nativo minimo para Conversaciones y layout auto-ajustado al abrir.
+El lab visual es una ventana Windows nativa temporal. No usa navegador, WebView, HTML, CSS ni JavaScript. Incluye una vista estatica configurable para conexion, arranque minimo sin abrir modelos automaticamente, snapshot, arbol completo de menus, resolucion de acciones, carga de Native UI IR por vista, cache de metadata por sesion, cache de registros con presupuesto de memoria y TTL, grilla virtual, prefetch pequeno, detalle lazy, busqueda, paginacion, detalle lateral, permisos efectivos, guardado basico de campos editables, panel nativo minimo para Conversaciones y layout auto-ajustado al abrir.
 
 ## Configuracion inicial recomendada
 

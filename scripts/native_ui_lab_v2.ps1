@@ -35,8 +35,18 @@ $script:IrCache = @{}
 $script:PermissionsCache = @{}
 $script:RecordPageCache = @{}
 $script:RecordPageCacheOrder = @()
-$script:RecordPageCacheLimit = 12
+$script:RecordPageCacheBytes = 0
+$script:RecordPageCacheMaxBytes = 2 * 1024 * 1024
+$script:DetailRecordCache = @{}
+$script:DetailRecordCacheOrder = @()
+$script:DetailRecordCacheBytes = 0
+$script:DetailRecordCacheMaxBytes = 1 * 1024 * 1024
+$script:ViewStateCache = @{}
 $script:CurrentGridSignature = ""
+$script:CurrentViewKey = ""
+$script:SuppressGridSelection = $false
+$script:SuppressSearchReload = $false
+$script:EnablePrefetch = $true
 $script:SnapshotRoot = $null
 $script:SuppressMenuOpen = $false
 $script:IsLoading = $false
@@ -805,11 +815,13 @@ function Show-UnsupportedAction {
     if ($ListTitle) { $ListTitle.Text = $Title }
     if ($ListSubtitle) { $ListSubtitle.Text = $ActionType }
 
-    $Grid.Rows.Clear()
+    $Grid.RowCount = 0
     $Grid.Columns.Clear()
     [void]$Grid.Columns.Add("message", "Estado")
     $Grid.Columns["message"].FillWeight = 100
-    [void]$Grid.Rows.Add($Message)
+    $script:CurrentRecords = @([pscustomobject]@{ id = 0; message = $Message })
+    $Grid.RowCount = 1
+    $script:CurrentGridSignature = "message"
 
     $DetailBody.Controls.Clear()
     $DetailTitle.Text = $Title
@@ -1152,9 +1164,94 @@ function Focus-FirstEditableField {
     }
 }
 
+function Get-DetailCacheKey {
+    param(
+        [string] $ModelName,
+        [int] $RecordId,
+        [array] $Fields
+    )
+    $FieldsPart = @($Fields | Sort-Object) -join ","
+    return "$ModelName|$RecordId|$FieldsPart"
+}
+
+function Remove-DetailCacheKey {
+    param([string] $Key)
+    if (-not $script:DetailRecordCache.ContainsKey($Key)) { return }
+    $Entry = $script:DetailRecordCache[$Key]
+    $script:DetailRecordCacheBytes = [Math]::Max(0, $script:DetailRecordCacheBytes - [int]$Entry.bytes)
+    $script:DetailRecordCache.Remove($Key)
+    $script:DetailRecordCacheOrder = @($script:DetailRecordCacheOrder | Where-Object { $_ -ne $Key })
+}
+
+function Clear-DetailCacheForModel {
+    param([string] $ModelName)
+    $Prefix = "$ModelName|"
+    $Keys = @($script:DetailRecordCache.Keys | Where-Object { $_.StartsWith($Prefix) })
+    foreach ($Key in $Keys) {
+        Remove-DetailCacheKey $Key
+    }
+}
+
+function Get-DetailRecordFromCache {
+    param([string] $Key)
+    if (-not $script:DetailRecordCache.ContainsKey($Key)) { return $null }
+    $Entry = $script:DetailRecordCache[$Key]
+    $Ttl = Get-ModelCacheTtlSeconds $Entry.model
+    if (((Get-Date) - $Entry.cached_at).TotalSeconds -gt $Ttl) {
+        Remove-DetailCacheKey $Key
+        return $null
+    }
+    $script:DetailRecordCacheOrder = @($script:DetailRecordCacheOrder | Where-Object { $_ -ne $Key })
+    $script:DetailRecordCacheOrder += $Key
+    return $Entry.value
+}
+
+function Set-DetailRecordCache {
+    param([string] $Key, $Value)
+    $Bytes = Get-ApproxCacheBytes $Value
+    if ($Bytes -gt $script:DetailRecordCacheMaxBytes) { return }
+    if ($script:DetailRecordCache.ContainsKey($Key)) {
+        Remove-DetailCacheKey $Key
+    }
+    $script:DetailRecordCache[$Key] = [pscustomobject]@{
+        value = $Value
+        bytes = $Bytes
+        model = $script:CurrentModel
+        cached_at = Get-Date
+    }
+    $script:DetailRecordCacheBytes += $Bytes
+    $script:DetailRecordCacheOrder = @($script:DetailRecordCacheOrder | Where-Object { $_ -ne $Key })
+    $script:DetailRecordCacheOrder += $Key
+    while ($script:DetailRecordCacheBytes -gt $script:DetailRecordCacheMaxBytes -and $script:DetailRecordCacheOrder.Count -gt 0) {
+        Remove-DetailCacheKey $script:DetailRecordCacheOrder[0]
+    }
+}
+
+function Get-DetailRecord {
+    param($ListRecord)
+    if (-not $ListRecord) { return $null }
+    $RecordId = [int](Get-RecordValue $ListRecord "id")
+    if ($RecordId -le 0) { return $ListRecord }
+
+    $Fields = @("display_name") + @($script:CurrentListFields) + @($script:CurrentDetailFields)
+    $Fields = @($Fields | Where-Object { $_ } | Select-Object -Unique)
+    $Key = Get-DetailCacheKey -ModelName $script:CurrentModel -RecordId $RecordId -Fields $Fields
+    $Cached = Get-DetailRecordFromCache $Key
+    if ($Cached) { return $Cached }
+
+    Set-Status "Cargando detalle de $script:CurrentModelName..."
+    $Result = Invoke-OdooJson -Path "/native-ui/model/$script:CurrentModel/record/$RecordId" -Params @{
+        fields = $Fields
+    }
+    Set-DetailRecordCache -Key $Key -Value $Result.record
+    return $Result.record
+}
+
 function Load-Detail {
     param($Record)
 
+    $ListRecord = $Record
+    $Record = Get-DetailRecord $ListRecord
     $script:CurrentRecord = $Record
     $script:FormControls = @{}
     $DetailBody.Controls.Clear()
@@ -1226,6 +1323,22 @@ function Convert-CachePart {
     }
 }
 
+function Get-ApproxCacheBytes {
+    param($Value)
+    try {
+        return [System.Text.Encoding]::UTF8.GetByteCount(($Value | ConvertTo-Json -Depth 32 -Compress))
+    } catch {
+        return ([string]$Value).Length * 2
+    }
+}
+
+function Get-ModelCacheTtlSeconds {
+    param([string] $ModelName)
+    if ($ModelName -like "mail.*" -or $ModelName -like "discuss.*") { return 20 }
+    if ($ModelName -like "stock.*" -or $ModelName -like "bus.*") { return 45 }
+    return 180
+}
+
 function Get-RecordPageCacheKey {
     param(
         [array] $Domain,
@@ -1242,20 +1355,80 @@ function Get-RecordPageCacheKey {
 function Get-RecordPageFromCache {
     param([string] $Key)
     if (-not $script:RecordPageCache.ContainsKey($Key)) { return $null }
+    $Entry = $script:RecordPageCache[$Key]
+    $Ttl = Get-ModelCacheTtlSeconds $Entry.model
+    if (((Get-Date) - $Entry.cached_at).TotalSeconds -gt $Ttl) {
+        Remove-RecordPageCacheKey $Key
+        return $null
+    }
     $script:RecordPageCacheOrder = @($script:RecordPageCacheOrder | Where-Object { $_ -ne $Key })
     $script:RecordPageCacheOrder += $Key
-    return $script:RecordPageCache[$Key]
+    return $Entry.value
+}
+
+function Remove-RecordPageCacheKey {
+    param([string] $Key)
+    if (-not $script:RecordPageCache.ContainsKey($Key)) { return }
+    $Entry = $script:RecordPageCache[$Key]
+    $script:RecordPageCacheBytes = [Math]::Max(0, $script:RecordPageCacheBytes - [int]$Entry.bytes)
+    $script:RecordPageCache.Remove($Key)
+    $script:RecordPageCacheOrder = @($script:RecordPageCacheOrder | Where-Object { $_ -ne $Key })
 }
 
 function Set-RecordPageCache {
     param([string] $Key, $Value)
-    $script:RecordPageCache[$Key] = $Value
+    $Bytes = Get-ApproxCacheBytes $Value
+    if ($Bytes -gt $script:RecordPageCacheMaxBytes) { return }
+    if ($script:RecordPageCache.ContainsKey($Key)) {
+        Remove-RecordPageCacheKey $Key
+    }
+    $script:RecordPageCache[$Key] = [pscustomobject]@{
+        value = $Value
+        bytes = $Bytes
+        model = $script:CurrentModel
+        cached_at = Get-Date
+    }
+    $script:RecordPageCacheBytes += $Bytes
     $script:RecordPageCacheOrder = @($script:RecordPageCacheOrder | Where-Object { $_ -ne $Key })
     $script:RecordPageCacheOrder += $Key
-    while ($script:RecordPageCacheOrder.Count -gt $script:RecordPageCacheLimit) {
+    while ($script:RecordPageCacheBytes -gt $script:RecordPageCacheMaxBytes -and $script:RecordPageCacheOrder.Count -gt 0) {
         $Oldest = $script:RecordPageCacheOrder[0]
-        $script:RecordPageCache.Remove($Oldest)
-        $script:RecordPageCacheOrder = @($script:RecordPageCacheOrder | Select-Object -Skip 1)
+        Remove-RecordPageCacheKey $Oldest
+    }
+}
+
+function Invoke-NextPagePrefetch {
+    param(
+        [array] $Domain,
+        [array] $Fields,
+        [string] $Order
+    )
+    if (-not $script:EnablePrefetch) { return }
+    if (($script:Offset + $script:Limit) -ge $script:Total) { return }
+    if ($script:RecordPageCacheBytes -gt [int]($script:RecordPageCacheMaxBytes * 0.80)) { return }
+
+    $NextOffset = $script:Offset + $script:Limit
+    $NextKey = Get-RecordPageCacheKey `
+        -Domain $Domain `
+        -Fields $Fields `
+        -Offset $NextOffset `
+        -Limit $script:Limit `
+        -Order $Order
+    if (Get-RecordPageFromCache $NextKey) { return }
+
+    try {
+        $PrefetchResult = Invoke-OdooJson -Path "/native-ui/model/$script:CurrentModel/records" -Params @{
+            domain = $Domain
+            fields = $Fields
+            offset = $NextOffset
+            limit = $script:Limit
+            count = $false
+            order = $Order
+        }
+        $PrefetchResult | Add-Member -NotePropertyName total -NotePropertyValue $script:Total -Force
+        Set-RecordPageCache -Key $NextKey -Value $PrefetchResult
+    } catch {
+        Set-Status "No se pudo precargar la pagina siguiente: $(Get-FriendlyError $_)"
     }
 }
 
@@ -1264,14 +1437,71 @@ function Clear-RecordPageCacheForModel {
     $Prefix = "$ModelName|"
     $Keys = @($script:RecordPageCache.Keys | Where-Object { $_.StartsWith($Prefix) })
     foreach ($Key in $Keys) {
-        $script:RecordPageCache.Remove($Key)
+        Remove-RecordPageCacheKey $Key
     }
-    $script:RecordPageCacheOrder = @($script:RecordPageCacheOrder | Where-Object { -not $_.StartsWith($Prefix) })
+}
+
+function Get-ViewStateKey {
+    param(
+        [string] $ModelName,
+        [string] $Title,
+        [array] $Domain,
+        [array] $Views
+    )
+    return "$ModelName|$Title|$(Convert-CachePart $Domain)|$(Convert-CachePart $Views)"
+}
+
+function Save-CurrentViewState {
+    if (-not $script:CurrentViewKey) { return }
+    $SelectedId = 0
+    if ($script:CurrentRecord) {
+        $SelectedId = [int](Get-RecordValue $script:CurrentRecord "id")
+    }
+    $FirstRow = 0
+    try {
+        if ($Grid -and $Grid.RowCount -gt 0) { $FirstRow = $Grid.FirstDisplayedScrollingRowIndex }
+    } catch {
+        $FirstRow = 0
+    }
+    $SearchFieldValue = if ($SearchFieldBox -and $SearchFieldBox.SelectedItem) { [string]$SearchFieldBox.SelectedItem.Value } else { "__all__" }
+    $script:ViewStateCache[$script:CurrentViewKey] = [pscustomobject]@{
+        offset = $script:Offset
+        selected_id = $SelectedId
+        first_row = $FirstRow
+        query = if ($SearchBox) { $SearchBox.Text } else { "" }
+        search_field = $SearchFieldValue
+    }
+}
+
+function Restore-ViewStateInputs {
+    param($State)
+    if (-not $State) { return }
+    $script:SuppressSearchReload = $true
+    try {
+        if ($SearchBox) { $SearchBox.Text = [string]$State.query }
+        if ($SearchFieldBox -and $State.search_field) {
+            $SearchFieldBox.SelectedValue = [string]$State.search_field
+            if ($SearchFieldBox.SelectedIndex -lt 0) { $SearchFieldBox.SelectedIndex = 0 }
+        }
+    } finally {
+        $script:SuppressSearchReload = $false
+    }
+}
+
+function Restore-ViewScroll {
+    param($State)
+    if (-not $State -or -not $Grid -or $Grid.RowCount -eq 0) { return }
+    try {
+        $Row = [Math]::Min([Math]::Max(0, [int]$State.first_row), $Grid.RowCount - 1)
+        $Grid.FirstDisplayedScrollingRowIndex = $Row
+    } catch {
+    }
 }
 
 function Ensure-GridColumns {
     $Signature = ((@("id") + @($script:CurrentListFields)) -join "|")
     if ($script:CurrentGridSignature -eq $Signature -and $Grid.Columns.Count -gt 0) { return }
+    $Grid.RowCount = 0
     $Grid.Columns.Clear()
     [void]$Grid.Columns.Add("id", "ID")
     $Grid.Columns["id"].FillWeight = 12
@@ -1288,16 +1518,11 @@ function Render-RecordsPage {
     Ensure-GridColumns
     $Grid.SuspendLayout()
     try {
-        $Grid.Rows.Clear()
-        foreach ($Record in $script:CurrentRecords) {
-            $Values = New-Object System.Collections.ArrayList
-            [void]$Values.Add($Record.id)
-            foreach ($FieldName in $script:CurrentListFields) {
-                [void]$Values.Add((Format-OdooValue (Get-RecordValue $Record $FieldName)))
-            }
-            [void]$Grid.Rows.Add($Values.ToArray())
-        }
+        $script:SuppressGridSelection = $true
+        $Grid.RowCount = 0
+        $Grid.RowCount = $script:CurrentRecords.Count
     } finally {
+        $script:SuppressGridSelection = $false
         $Grid.ResumeLayout()
     }
 
@@ -1368,7 +1593,7 @@ function Load-ModelPage {
         }
     }
 
-    $ReadFields = @("display_name") + @($script:CurrentListFields) + @($script:CurrentDetailFields)
+    $ReadFields = @("display_name") + @($script:CurrentListFields)
     $ReadFields = @($ReadFields | Where-Object { $_ } | Select-Object -Unique)
     $ResolvedOrder = if ($Order) { $Order } elseif (Test-FieldExists "name") { "name" } else { "id" }
     $CacheKey = Get-RecordPageCacheKey `
@@ -1406,6 +1631,9 @@ function Load-ModelPage {
         -Title "Actualizando vista" `
         -Detail "Reutilizando columnas cuando el esquema no cambio y aplicando solo la pagina visible."
     Render-RecordsPage -SelectId $SelectId
+    if (-not $UsedCache) {
+        Invoke-NextPagePrefetch -Domain $Domain -Fields $ReadFields -Order $ResolvedOrder
+    }
 
     $CacheSuffix = if ($UsedCache) { " desde cache" } else { "" }
     Stop-Loading "$script:CurrentModelName cargado${CacheSuffix}: $($PageLabel.Text)"
@@ -1425,6 +1653,9 @@ function Load-Model {
         [switch] $ReadOnly
     )
 
+    Save-CurrentViewState
+    $NextViewKey = Get-ViewStateKey -ModelName $ModelName -Title $Title -Domain $Domain -Views $Views
+    $SavedState = if ($script:ViewStateCache.ContainsKey($NextViewKey)) { $script:ViewStateCache[$NextViewKey] } else { $null }
     Start-Loading "Preparando $Title..."
     try {
     Show-DynamicView
@@ -1438,6 +1669,7 @@ function Load-Model {
     $script:CurrentModelName = if ($Title) { $Title } else { $ModelName }
     $script:IsReadOnlyModel = [bool]$ReadOnly
     $script:CurrentDomain = @($Domain)
+    $script:CurrentViewKey = $NextViewKey
 
     if ($script:FieldCache.ContainsKey($ModelName)) {
         Set-LoadingDetail `
@@ -1513,9 +1745,13 @@ function Load-Model {
         $script:CurrentDetailSections = @([pscustomobject]@{ title = "General"; fields = $script:CurrentDetailFields })
     }
     Update-CentralSearchFields
+    Restore-ViewStateInputs $SavedState
     $DetailTitle.Text = $script:CurrentModelName
     Stop-Loading "Preparado $script:CurrentModelName."
-    Load-ModelPage 0
+    $TargetOffset = if ($SavedState) { [int]$SavedState.offset } else { 0 }
+    $TargetSelectedId = if ($SavedState) { [int]$SavedState.selected_id } else { 0 }
+    Load-ModelPage -Offset $TargetOffset -SelectId $TargetSelectedId
+    Restore-ViewScroll $SavedState
     } catch {
         Stop-Loading
         throw
@@ -1545,6 +1781,12 @@ function Connect-NativeUi {
     $script:Session = New-Object Microsoft.PowerShell.Commands.WebRequestSession
     $script:RecordPageCache.Clear()
     $script:RecordPageCacheOrder = @()
+    $script:RecordPageCacheBytes = 0
+    $script:DetailRecordCache.Clear()
+    $script:DetailRecordCacheOrder = @()
+    $script:DetailRecordCacheBytes = 0
+    $script:ViewStateCache.Clear()
+    $script:CurrentViewKey = ""
 
     Set-LoadingDetail `
         -Title "Probando bridge" `
@@ -1581,12 +1823,8 @@ function Connect-NativeUi {
         $ConnectionSubtitle.Text = "Conectado a $($SessionInfo.database). Esta vista sigue siendo fija para cambios de conexion."
     }
     Stop-Loading "Conectado a $($SessionInfo.database)."
-    if ($StayOnConnectionBox -and $StayOnConnectionBox.Checked) {
-        Show-ConnectionView
-        Set-Status "Conectado a $($SessionInfo.database). La vista estatica queda fija."
-    } else {
-        Load-Metadata
-    }
+    Show-ConnectionView
+    Set-Status "Conectado a $($SessionInfo.database). Elegi una app para cargarla bajo demanda."
     } catch {
         Stop-Loading
         throw
@@ -1617,6 +1855,7 @@ function Save-CurrentRecord {
         values = $Values
     })
     Clear-RecordPageCacheForModel $script:CurrentModel
+    Clear-DetailCacheForModel $script:CurrentModel
     Stop-Loading "Registro $Id guardado."
     Load-CurrentPage $script:Offset -SelectId $Id
     } catch {
@@ -1643,6 +1882,7 @@ function New-CurrentRecord {
             values = $Values
         }
         Clear-RecordPageCacheForModel $script:CurrentModel
+        Clear-DetailCacheForModel $script:CurrentModel
         Stop-Loading "Registro creado: $($Result.id)"
         $SearchBox.Text = ""
         Load-CurrentPage 0 -SelectId ([int]$Result.id) -Order "id desc"
@@ -1963,8 +2203,9 @@ $AutoConnectBox.Margin = New-Object System.Windows.Forms.Padding(0, 10, 12, 0)
 $ConnectionActions.Controls.Add($AutoConnectBox, 0, 0)
 
 $StayOnConnectionBox = New-Object System.Windows.Forms.CheckBox
-$StayOnConnectionBox.Text = "Mantener esta vista al conectar"
-$StayOnConnectionBox.Checked = $false
+$StayOnConnectionBox.Text = "Arranque minimo"
+$StayOnConnectionBox.Checked = $true
+$StayOnConnectionBox.Enabled = $false
 $StayOnConnectionBox.Dock = "Fill"
 $StayOnConnectionBox.ForeColor = $script:ColorText
 $StayOnConnectionBox.Font = New-Object System.Drawing.Font("Segoe UI", 9)
@@ -2072,6 +2313,7 @@ $Grid.RowHeadersVisible = $false
 $Grid.SelectionMode = "FullRowSelect"
 $Grid.MultiSelect = $false
 $Grid.AutoSizeColumnsMode = "Fill"
+$Grid.VirtualMode = $true
 Set-ModernGrid $Grid
 [void]$Grid.Columns.Add("id", "ID")
 [void]$Grid.Columns.Add("display_name", "Contacto")
@@ -2240,6 +2482,7 @@ $SaveButton.Add_Click({ try { Save-CurrentRecord } catch { Set-Status (Get-Frien
 $CancelButton.Add_Click({ Load-Detail $script:CurrentRecord })
 
 $SearchFieldBox.Add_SelectedIndexChanged({
+    if ($script:SuppressSearchReload) { return }
     if ($SearchBox -and $SearchBox.Text.Trim()) {
         try { Load-CurrentPage 0 } catch { Set-Status (Get-FriendlyError $_) }
     }
@@ -2252,7 +2495,21 @@ $SearchBox.Add_KeyDown({
     }
 })
 
+$Grid.Add_CellValueNeeded({
+    param($Sender, $EventArgs)
+    if ($EventArgs.RowIndex -lt 0 -or $EventArgs.RowIndex -ge $script:CurrentRecords.Count) { return }
+    if ($EventArgs.ColumnIndex -lt 0 -or $EventArgs.ColumnIndex -ge $Sender.Columns.Count) { return }
+    $Record = $script:CurrentRecords[$EventArgs.RowIndex]
+    $FieldName = [string]$Sender.Columns[$EventArgs.ColumnIndex].Name
+    $EventArgs.Value = if ($FieldName -eq "id") {
+        Get-RecordValue $Record "id"
+    } else {
+        Format-OdooValue (Get-RecordValue $Record $FieldName)
+    }
+})
+
 $Grid.Add_SelectionChanged({
+    if ($script:SuppressGridSelection) { return }
     if ($Grid.SelectedRows.Count -eq 0) { return }
     $Index = $Grid.SelectedRows[0].Index
     if ($Index -ge 0 -and $Index -lt $script:CurrentRecords.Count) {

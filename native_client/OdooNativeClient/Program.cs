@@ -344,7 +344,7 @@ namespace OdooNativeClient
             connectButton.Click += async delegate { await ConnectAsync(); };
             top.Controls.Add(connectButton, 2, 0);
 
-            mainSplit = new SplitContainer { Dock = DockStyle.Fill, FixedPanel = FixedPanel.Panel1, Panel1MinSize = 260, Panel2MinSize = 520 };
+            mainSplit = new SplitContainer { Dock = DockStyle.Fill, FixedPanel = FixedPanel.Panel1, Panel1MinSize = 1, Panel2MinSize = 1 };
             mainSplit.Panel1.BackColor = panel;
             mainSplit.Panel2.BackColor = background;
             root.Controls.Add(mainSplit, 0, 1);
@@ -376,7 +376,7 @@ namespace OdooNativeClient
 
         private void BuildContent()
         {
-            contentSplit = new SplitContainer { Dock = DockStyle.Fill, FixedPanel = FixedPanel.Panel2, Panel1MinSize = 520, Panel2MinSize = 320 };
+            contentSplit = new SplitContainer { Dock = DockStyle.Fill, FixedPanel = FixedPanel.Panel2, Panel1MinSize = 1, Panel2MinSize = 1 };
             mainSplit.Panel2.Controls.Add(contentSplit);
 
             staticHost = new Panel { Dock = DockStyle.Fill, BackColor = background };
@@ -540,23 +540,26 @@ namespace OdooNativeClient
         {
             if (mainSplit != null && mainSplit.Width > 820)
             {
+                var minPanel1 = 260;
+                var minPanel2 = 520;
                 var target = Math.Min(340, Math.Max(280, (int)(mainSplit.Width * 0.22)));
-                var max = mainSplit.Width - mainSplit.Panel2MinSize;
-                if (max > mainSplit.Panel1MinSize)
+                var max = mainSplit.Width - minPanel2;
+                if (max > minPanel1)
                 {
-                    mainSplit.SplitterDistance = Math.Min(target, max);
+                    mainSplit.SplitterDistance = Math.Min(Math.Max(minPanel1, target), max);
                 }
             }
 
             if (contentSplit != null && contentSplit.Width > 880)
             {
+                var minPanel1 = 520;
+                var minPanel2 = 320;
                 var detailWidth = Math.Min(420, Math.Max(340, (int)(contentSplit.Width * 0.30)));
                 var target = contentSplit.Width - detailWidth;
-                var min = contentSplit.Panel1MinSize;
-                var max = contentSplit.Width - contentSplit.Panel2MinSize;
-                if (max > min)
+                var max = contentSplit.Width - minPanel2;
+                if (max > minPanel1)
                 {
-                    contentSplit.SplitterDistance = Math.Min(Math.Max(min, target), max);
+                    contentSplit.SplitterDistance = Math.Min(Math.Max(minPanel1, target), max);
                 }
             }
         }

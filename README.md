@@ -94,10 +94,10 @@ Get-Content scripts\native_ui_benchmark.py | docker compose exec -T odoo odoo sh
 Cliente visual minimo:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\native_ui_lab_v2.ps1 -Database prueba2 -Login "benjamacias01@gmail.com"
+powershell -ExecutionPolicy Bypass -File .\scripts\native_ui_lab_v2.ps1 -Database odoo -Login admin
 ```
 
-El lab visual es una ventana Windows nativa temporal. No usa navegador, WebView, HTML, CSS ni JavaScript. Incluye snapshot, arbol completo de menus, carga de vistas al seleccionar acciones, busqueda, paginacion, detalle lateral, guardado basico de campos editables y layout auto-ajustado al abrir.
+El lab visual es una ventana Windows nativa temporal. No usa navegador, WebView, HTML, CSS ni JavaScript. Incluye snapshot, arbol completo de menus, resolucion de acciones, carga de Native UI IR por vista, cache de metadata por sesion, busqueda, paginacion, detalle lateral, permisos efectivos, guardado basico de campos editables, panel nativo minimo para Conversaciones y layout auto-ajustado al abrir.
 
 ## Configuracion inicial recomendada
 
@@ -198,12 +198,13 @@ bm-odoo-suite/
   custom_addons/README.md
   custom_addons/.gitkeep
   backups/.gitkeep
+  custom_addons/native_ui_bridge/
   scripts/start.sh
   scripts/stop.sh
   scripts/logs.sh
   scripts/backup.sh
   scripts/restore.sh
-  PLAN_IMPLEMENTACION.md
+  docs/
   README.md
 ```
 
@@ -211,6 +212,5 @@ bm-odoo-suite/
 
 - Odoo se expone solo en `127.0.0.1:8069`.
 - PostgreSQL y los datos de Odoo usan volumenes persistentes de Docker.
-- `custom_addons/` queda preparado para modulos futuros, pero esta entrega no incluye ninguno.
+- `custom_addons/native_ui_bridge` contiene el bridge JSON usado por el cliente nativo.
 - `.env` no debe versionarse porque contiene valores locales.
-- El plan por etapas esta en `PLAN_IMPLEMENTACION.md`.

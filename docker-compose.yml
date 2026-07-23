@@ -1,0 +1,39 @@
+services:
+  db:
+    image: ${POSTGRES_IMAGE:-postgres:15}
+    container_name: ${COMPOSE_PROJECT_NAME:-bm-odoo-suite}-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+      POSTGRES_USER: ${POSTGRES_USER:-odoo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - odoo-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  odoo:
+    image: ${ODOO_IMAGE:-odoo:18.0}
+    container_name: ${COMPOSE_PROJECT_NAME:-bm-odoo-suite}-odoo
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${ODOO_PORT:-8069}:8069"
+    environment:
+      HOST: db
+      PORT: 5432
+      USER: ${POSTGRES_USER:-odoo}
+      PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - odoo-web-data:/var/lib/odoo
+      - ./config/odoo.conf:/etc/odoo/odoo.conf:ro
+      - ./custom_addons:/mnt/extra-addons
+
+volumes:
+  odoo-db-data:
+  odoo-web-data:

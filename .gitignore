@@ -1,0 +1,37 @@
+.env
+.env.*
+!.env.example
+
+# Local backups and generated dumps
+backups/*
+!backups/.gitkeep
+*.dump
+*.sql
+*.zip
+
+# Local editor, OS and runtime noise
+__pycache__/
+*.py[cod]
+*.log
+*.tmp
+*.bak
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+
+# Codex/OpenAI local workspace artifacts
+.codex/
+.agents/
+.openai/
+codex-*
+*.codex*
+
+# Internal implementation notes
+PLAN_IMPLEMENTACION.md
+ODOO_NATIVE_UI_ENGINE_PLAN.md
+odoo_native_ui_engine_plan*

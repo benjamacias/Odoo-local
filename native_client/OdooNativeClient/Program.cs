@@ -19,9 +19,31 @@ namespace OdooNativeClient
         [STAThread]
         private static void Main()
         {
-            Application.EnableVisualStyles();
-            Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new MainForm());
+            try
+            {
+                Application.EnableVisualStyles();
+                Application.SetCompatibleTextRenderingDefault(false);
+                Application.ThreadException += delegate(object sender, ThreadExceptionEventArgs args) { ShowStartupError(args.Exception); };
+                AppDomain.CurrentDomain.UnhandledException += delegate(object sender, UnhandledExceptionEventArgs args) { ShowStartupError(args.ExceptionObject as Exception); };
+                Application.Run(new MainForm());
+            }
+            catch (Exception ex)
+            {
+                ShowStartupError(ex);
+            }
+        }
+
+        private static void ShowStartupError(Exception ex)
+        {
+            var message = ex == null ? "Error desconocido." : ex.ToString();
+            try
+            {
+                File.WriteAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "OdooNativeClient.error.log"), message);
+            }
+            catch
+            {
+            }
+            MessageBox.Show(message, "Odoo Native Client", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
     }
 
@@ -292,6 +314,8 @@ namespace OdooNativeClient
             BackColor = background;
 
             BuildUi();
+            Shown += delegate { ApplyResponsiveLayout(); BringWindowToFront(); };
+            Resize += delegate { ApplyResponsiveLayout(); };
             ShowConnectionView();
         }
 
@@ -320,7 +344,7 @@ namespace OdooNativeClient
             connectButton.Click += async delegate { await ConnectAsync(); };
             top.Controls.Add(connectButton, 2, 0);
 
-            mainSplit = new SplitContainer { Dock = DockStyle.Fill, FixedPanel = FixedPanel.Panel1, SplitterDistance = 300, Panel1MinSize = 260 };
+            mainSplit = new SplitContainer { Dock = DockStyle.Fill, FixedPanel = FixedPanel.Panel1, Panel1MinSize = 260, Panel2MinSize = 520 };
             mainSplit.Panel1.BackColor = panel;
             mainSplit.Panel2.BackColor = background;
             root.Controls.Add(mainSplit, 0, 1);
@@ -352,7 +376,7 @@ namespace OdooNativeClient
 
         private void BuildContent()
         {
-            contentSplit = new SplitContainer { Dock = DockStyle.Fill, FixedPanel = FixedPanel.Panel2, SplitterDistance = 760, Panel1MinSize = 520, Panel2MinSize = 320 };
+            contentSplit = new SplitContainer { Dock = DockStyle.Fill, FixedPanel = FixedPanel.Panel2, Panel1MinSize = 520, Panel2MinSize = 320 };
             mainSplit.Panel2.Controls.Add(contentSplit);
 
             staticHost = new Panel { Dock = DockStyle.Fill, BackColor = background };
@@ -510,6 +534,40 @@ namespace OdooNativeClient
         {
             statusLabel = new Label { Dock = DockStyle.Fill, Text = "Listo.", TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(10, 0, 0, 0), ForeColor = subtle, BackColor = background };
             root.Controls.Add(statusLabel, 0, 2);
+        }
+
+        private void ApplyResponsiveLayout()
+        {
+            if (mainSplit != null && mainSplit.Width > 820)
+            {
+                var target = Math.Min(340, Math.Max(280, (int)(mainSplit.Width * 0.22)));
+                var max = mainSplit.Width - mainSplit.Panel2MinSize;
+                if (max > mainSplit.Panel1MinSize)
+                {
+                    mainSplit.SplitterDistance = Math.Min(target, max);
+                }
+            }
+
+            if (contentSplit != null && contentSplit.Width > 880)
+            {
+                var detailWidth = Math.Min(420, Math.Max(340, (int)(contentSplit.Width * 0.30)));
+                var target = contentSplit.Width - detailWidth;
+                var min = contentSplit.Panel1MinSize;
+                var max = contentSplit.Width - contentSplit.Panel2MinSize;
+                if (max > min)
+                {
+                    contentSplit.SplitterDistance = Math.Min(Math.Max(min, target), max);
+                }
+            }
+        }
+
+        private void BringWindowToFront()
+        {
+            WindowState = FormWindowState.Normal;
+            TopMost = true;
+            BringToFront();
+            Activate();
+            TopMost = false;
         }
 
         private TextBox AddField(TableLayoutPanel form, int row, string label, string value, bool password)
